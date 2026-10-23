@@ -53,9 +53,13 @@ final class Picker {
     private final View layer;
     private final LinearLayout panel;
     private final TextView title, subtitle, ruleView, status;
-    private final TextView wider, narrower, hide, hiddenList;
+    private final TextView wider, narrower, hide, hiddenList, layers;
     private final ViewTreeObserver.OnPreDrawListener preDraw;
 
+    /** Все кандидаты под пальцем во всех слоях окна, от лучшего к худшему. */
+    private List<View> stack = Collections.emptyList();
+    private int stackIndex;
+    private int lastTapX = -1, lastTapY = -1;
     private List<View> path = Collections.emptyList();
     private int index = -1;
     private List<RuleBuilder.Candidate> candidates = Collections.emptyList();
@@ -211,11 +215,17 @@ final class Picker {
         LinearLayout row = new LinearLayout(a);
         wider = ui.button("⬆ Шире", false);
         narrower = ui.button("⬇ Уже", false);
-        hiddenList = ui.button("Скрытые", false);
         row.addView(wider, weighted(0));
         row.addView(narrower, weighted(ui.dp(8)));
-        row.addView(hiddenList, weighted(ui.dp(8)));
         panel.addView(row, lp(12));
+
+        LinearLayout row2 = new LinearLayout(a);
+        layers = ui.button("Слои", false);
+        hiddenList = ui.button("Скрытые", false);
+        row2.addView(layers, weighted(0));
+        row2.addView(hiddenList, weighted(ui.dp(8)));
+        panel.addView(row2, lp(8));
+        layers.setOnClickListener(v -> safe(this::showLayers));
         wider.setOnClickListener(v -> safe(() -> move(-1)));
         narrower.setOnClickListener(v -> safe(() -> move(1)));
         hiddenList.setOnClickListener(v -> safe(() -> RulesDialog.show(activity, ui, this::refreshCounters)));
@@ -312,14 +322,51 @@ final class Picker {
     }
 
     private void selectAt(int x, int y) {
+        int slop = ui.dp(SLOP_DP);
+        if (stack.size() > 1 && Math.abs(x - lastTapX) < slop && Math.abs(y - lastTapY) < slop) {
+            // повторный тап в то же место — следующий слой
+            stackIndex = (stackIndex + 1) % stack.size();
+        } else {
+            stack = collectStack(decor, x, y);
+            stackIndex = 0;
+            lastTapX = x;
+            lastTapY = y;
+        }
+        status.setVisibility(View.GONE);
+        selectView(stack.isEmpty() ? null : stack.get(stackIndex));
+    }
+
+    private void selectView(View v) {
         List<View> p = new ArrayList<>();
-        hit(decor, x, y, p);
-        // корень окна выбирать бессмысленно
-        if (!p.isEmpty()) p.remove(0);
+        for (View cur = v; cur != null && cur != decor; ) {
+            p.add(0, cur);
+            Object parent = cur.getParent();
+            cur = parent instanceof View ? (View) parent : null;
+        }
         path = p;
         index = p.size() - 1;
-        status.setVisibility(View.GONE);
         onSelectionChanged();
+    }
+
+    private void showLayers() {
+        if (stack.isEmpty()) return;
+        String[] items = new String[stack.size()];
+        for (int i = 0; i < items.length; i++) items[i] = describe(stack.get(i));
+        ui.dialog()
+                .setTitle("Элементы под пальцем")
+                .setSingleChoiceItems(items, stackIndex, (d, which) -> {
+                    stackIndex = which;
+                    d.dismiss();
+                    safe(() -> selectView(stack.get(which)));
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private String describe(View v) {
+        float d = activity.getResources().getDisplayMetrics().density;
+        return RuleBuilder.label(v) + "\n" + v.getClass().getSimpleName() + " · "
+                + Math.round(v.getWidth() / d) + "×" + Math.round(v.getHeight() / d) + " dp";
     }
 
     private void move(int delta) {
@@ -344,7 +391,9 @@ final class Picker {
         refreshCounters();
         if (t == null) {
             title.setText("Выберите элемент");
-            subtitle.setText("Нажмите на то, что хотите скрыть. Прокручивать экран можно как обычно.");
+            subtitle.setText("Нажмите на то, что хотите скрыть. Повторный тап в то же место — элемент под ним. "
+                    + "Прокручивать экран можно как обычно.");
+            setEnabled(layers, false);
             ruleView.setVisibility(View.GONE);
             setEnabled(wider, false);
             setEnabled(narrower, false);
@@ -354,7 +403,8 @@ final class Picker {
         title.setText(RuleBuilder.label(t));
         float d = activity.getResources().getDisplayMetrics().density;
         String size = Math.round(t.getWidth() / d) + "×" + Math.round(t.getHeight() / d) + " dp";
-        subtitle.setText(t.getClass().getSimpleName() + " · " + size + " · уровень " + (index + 1) + " из " + path.size());
+        subtitle.setText(t.getClass().getSimpleName() + " · " + size + " · уровень " + (index + 1) + " из " + path.size()
+                + (stack.size() > 1 ? " · слой " + (stackIndex + 1) + " из " + stack.size() : ""));
         ruleView.setVisibility(View.VISIBLE);
         if (candidates.isEmpty()) {
             ruleView.setText("Не удалось составить правило — выберите уровень шире");
@@ -366,6 +416,8 @@ final class Picker {
         }
         setEnabled(wider, index > 0);
         setEnabled(narrower, index < path.size() - 1);
+        setEnabled(layers, stack.size() > 1);
+        layers.setText(stack.size() > 1 ? "Слои · " + stack.size() : "Слои");
     }
 
     private void refreshCounters() {
@@ -405,6 +457,8 @@ final class Picker {
         list.add(e);
         HookConfig.setLocalRules(activity, list);
         lastAdded = e;
+        stack = Collections.emptyList();
+        lastTapX = lastTapY = -1;
         path = Collections.emptyList();
         index = -1;
         candidates = Collections.emptyList();
@@ -460,22 +514,71 @@ final class Picker {
 
     // ================================================================ геометрия
 
-    /** Путь от корня до самого вложенного видимого элемента под точкой (экранные координаты). */
-    private static void hit(View v, int x, int y, List<View> out) {
-        if (v.getVisibility() != View.VISIBLE || v.getWidth() == 0 || v.getHeight() == 0) return;
-        if (ViewHider.isIgnored(v)) return;
+    /**
+     * Все элементы под точкой во всех слоях окна.
+     * Прозрачные контейнеры на весь экран (их у Яндекс Go много) не перекрывают
+     * то, что под ними: в начало списка попадают элементы с видимым содержимым
+     * (текст, картинка, фон), выше по слоям и меньше по площади.
+     */
+    private static List<View> collectStack(View root, int x, int y) {
+        final List<Object[]> found = new ArrayList<>(); // {view, content, order, area}
+        collect(root, root, x, y, found, new int[]{0});
+        Collections.sort(found, (a, b) -> {
+            int ca = (Integer) a[1], cb = (Integer) b[1];
+            boolean va = ca >= 2, vb = cb >= 2;
+            if (va != vb) return va ? -1 : 1;
+            long aa = (Long) a[3], ab = (Long) b[3];
+            if (aa != ab) return Long.compare(aa, ab);
+            return Integer.compare((Integer) b[2], (Integer) a[2]);
+        });
+        List<View> out = new ArrayList<>();
+        for (Object[] f : found) out.add((View) f[0]);
+        return out;
+    }
+
+    /** @return true, если сам элемент или кто-то из потомков содержит точку */
+    private static boolean collect(View v, View root, int x, int y, List<Object[]> out, int[] order) {
+        if (v.getVisibility() != View.VISIBLE || v.getWidth() == 0 || v.getHeight() == 0) return false;
+        if (ViewHider.isIgnored(v)) return false;
         int[] loc = new int[2];
         v.getLocationOnScreen(loc);
-        if (x < loc[0] || y < loc[1] || x >= loc[0] + v.getWidth() || y >= loc[1] + v.getHeight()) return;
-        out.add(v);
+        if (x < loc[0] || y < loc[1] || x >= loc[0] + v.getWidth() || y >= loc[1] + v.getHeight()) return false;
+        boolean childHit = false;
         if (v instanceof ViewGroup) {
             ViewGroup g = (ViewGroup) v;
-            for (int i = g.getChildCount() - 1; i >= 0; i--) {
-                int before = out.size();
-                hit(g.getChildAt(i), x, y, out);
-                if (out.size() > before) break;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View c = g.getChildAt(i);
+                if (c != null && collect(c, root, x, y, out, order)) childHit = true;
             }
         }
+        if (v == root) return true;
+        int content = contentLevel(v);
+        // контейнеры без своего содержимого, внутри которых нашлось что-то ещё, — только через «Шире»
+        if (content > 0 || !childHit) {
+            out.add(new Object[]{v, childHit && content < 2 ? 0 : content, order[0]++,
+                    (long) v.getWidth() * v.getHeight()});
+        }
+        return true;
+    }
+
+    /** 3 — текст/картинка, 2 — непрозрачный фон, 1 — пустой «лист», 0 — прочее. */
+    private static int contentLevel(View v) {
+        if (v.getAlpha() == 0f) return 0;
+        if (v instanceof TextView) {
+            CharSequence t = ((TextView) v).getText();
+            if (t != null && t.toString().trim().length() > 0) return 3;
+        }
+        if (v instanceof android.widget.ImageView && ((android.widget.ImageView) v).getDrawable() != null) return 3;
+        if (v.getContentDescription() != null && v.getContentDescription().length() > 0) return 3;
+        android.graphics.drawable.Drawable bg = v.getBackground();
+        if (bg != null) {
+            if (bg instanceof android.graphics.drawable.ColorDrawable) {
+                if (((android.graphics.drawable.ColorDrawable) bg).getAlpha() > 0) return 2;
+            } else {
+                return 2;
+            }
+        }
+        return 1;
     }
 
     private void rectOf(View v, Rect out) {
