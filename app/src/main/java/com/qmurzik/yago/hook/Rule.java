@@ -1,5 +1,7 @@
 package com.qmurzik.yago.hook;
 
+import com.qmurzik.yago.RuleEntry;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -25,9 +27,7 @@ import java.util.regex.PatternSyntaxException;
 final class Rule {
     enum Type { ID, TEXT, DESC, CLASS }
 
-    private static final Pattern LINE = Pattern.compile(
-            "^(id|text|desc|class)\\s*:\\s*(.+?)(?:\\s+\\^(\\d{1,2}))?\\s*$",
-            Pattern.CASE_INSENSITIVE);
+    private static final Pattern LINE = RuleEntry.LINE;
 
     final Type type;
     final Pattern pattern;
@@ -52,7 +52,7 @@ final class Rule {
         Type type = Type.valueOf(m.group(1).toUpperCase(java.util.Locale.ROOT));
         Pattern p;
         try {
-            p = Pattern.compile(m.group(2), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+            p = Pattern.compile(m.group(2), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.UNICODE_CHARACTER_CLASS);
         } catch (PatternSyntaxException e) {
             Log.w("Ошибка в выражении правила " + s + ": " + e.getDescription());
             return null;
@@ -77,16 +77,6 @@ final class Rule {
 
     /** Экранирует строку для использования в правиле как литерал. */
     static String escape(String s) {
-        StringBuilder b = new StringBuilder(s.length() + 8);
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if ("\\^$.|?*+()[]{}".indexOf(c) >= 0) b.append('\\');
-            if (c == '\n') {
-                b.append("\\n");
-                continue;
-            }
-            b.append(c);
-        }
-        return b.toString();
+        return RuleEntry.escape(s);
     }
 }

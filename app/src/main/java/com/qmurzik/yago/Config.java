@@ -12,8 +12,10 @@ public final class Config {
     public static final String K_EXTRA_HOSTS = "extra_hosts";
     public static final String K_HIDE_AD_VIEWS = "hide_ad_views";
     public static final String K_HIDE_AD_LABELED = "hide_ad_labeled";
+    /** JSON-массив {@link RuleEntry}. */
     public static final String K_RULES = "rules";
     public static final String K_INSPECTOR = "inspector";
+    public static final String K_FAB = "fab";
     public static final String K_ALLOW_SCREENSHOTS = "allow_screenshots";
     public static final String K_DEBUG_LOG = "debug_log";
 
@@ -23,6 +25,7 @@ public final class Config {
     public static final boolean D_HIDE_AD_VIEWS = true;
     public static final boolean D_HIDE_AD_LABELED = true;
     public static final boolean D_INSPECTOR = true;
+    public static final boolean D_FAB = false;
     public static final boolean D_ALLOW_SCREENSHOTS = false;
     public static final boolean D_DEBUG_LOG = false;
 

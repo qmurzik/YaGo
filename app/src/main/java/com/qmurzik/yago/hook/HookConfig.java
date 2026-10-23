@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 
 import com.qmurzik.yago.BuildConfig;
 import com.qmurzik.yago.Config;
+import com.qmurzik.yago.RuleEntry;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,8 +18,8 @@ import de.robv.android.xposed.XSharedPreferences;
 
 /**
  * Настройки внутри процесса приложения.
- * Источники: настройки модуля (XSharedPreferences) и локальные правила,
- * созданные инспектором прямо в приложении (хранятся в данных самого приложения).
+ * Источники: настройки модуля (XSharedPreferences) и правила, созданные пикером
+ * прямо в приложении (хранятся в данных самого приложения).
  */
 final class HookConfig {
     static final String LOCAL_PREFS = "yago_tweaks_local";
@@ -28,6 +29,7 @@ final class HookConfig {
     static volatile boolean hideAdViews = Config.D_HIDE_AD_VIEWS;
     static volatile boolean hideAdLabeled = Config.D_HIDE_AD_LABELED;
     static volatile boolean inspector = Config.D_INSPECTOR;
+    static volatile boolean fab = Config.D_FAB;
     static volatile boolean allowScreenshots = Config.D_ALLOW_SCREENSHOTS;
     static volatile boolean debugLog = Config.D_DEBUG_LOG;
     static volatile Set<String> blockedHosts = Collections.emptySet();
@@ -63,19 +65,12 @@ final class HookConfig {
         return rebuildRules(ctx) || changed;
     }
 
-    static List<String> localRules(Context ctx) {
-        String s = local(ctx).getString(LOCAL_RULES, "");
-        List<String> out = new ArrayList<>();
-        for (String line : s.split("\n")) {
-            if (!line.trim().isEmpty()) out.add(line.trim());
-        }
-        return out;
+    static List<RuleEntry> localRules(Context ctx) {
+        return RuleEntry.parseList(local(ctx).getString(LOCAL_RULES, ""));
     }
 
-    static void setLocalRules(Context ctx, List<String> lines) {
-        StringBuilder b = new StringBuilder();
-        for (String l : lines) b.append(l).append('\n');
-        local(ctx).edit().putString(LOCAL_RULES, b.toString()).apply();
+    static void setLocalRules(Context ctx, List<RuleEntry> list) {
+        local(ctx).edit().putString(LOCAL_RULES, RuleEntry.toJson(list)).apply();
         synchronized (HookConfig.class) {
             lastRulesSource = null;
             rebuildRules(ctx);
@@ -86,15 +81,20 @@ final class HookConfig {
         return ctx.getApplicationContext().getSharedPreferences(LOCAL_PREFS, Context.MODE_PRIVATE);
     }
 
+    private static boolean readable() {
+        return prefs != null && prefs.getFile().canRead();
+    }
+
     private static void loadModulePrefs() {
         XSharedPreferences p = prefs;
-        boolean ok = p != null && p.getFile().canRead();
+        boolean ok = readable();
         if (p != null && !ok) Log.w("Файл настроек модуля недоступен, используются значения по умолчанию");
 
         enabled = ok ? p.getBoolean(Config.K_ENABLED, Config.D_ENABLED) : Config.D_ENABLED;
         hideAdViews = ok ? p.getBoolean(Config.K_HIDE_AD_VIEWS, Config.D_HIDE_AD_VIEWS) : Config.D_HIDE_AD_VIEWS;
         hideAdLabeled = ok ? p.getBoolean(Config.K_HIDE_AD_LABELED, Config.D_HIDE_AD_LABELED) : Config.D_HIDE_AD_LABELED;
         inspector = ok ? p.getBoolean(Config.K_INSPECTOR, Config.D_INSPECTOR) : Config.D_INSPECTOR;
+        fab = ok ? p.getBoolean(Config.K_FAB, Config.D_FAB) : Config.D_FAB;
         allowScreenshots = ok ? p.getBoolean(Config.K_ALLOW_SCREENSHOTS, Config.D_ALLOW_SCREENSHOTS) : Config.D_ALLOW_SCREENSHOTS;
         debugLog = ok ? p.getBoolean(Config.K_DEBUG_LOG, Config.D_DEBUG_LOG) : Config.D_DEBUG_LOG;
 
@@ -115,7 +115,7 @@ final class HookConfig {
     }
 
     private static boolean rebuildRules(Context ctx) {
-        String module = prefs != null && prefs.getFile().canRead() ? prefs.getString(Config.K_RULES, "") : "";
+        String module = readable() ? prefs.getString(Config.K_RULES, "") : "";
         String local = "";
         if (ctx != null) {
             try {
@@ -126,12 +126,24 @@ final class HookConfig {
         } else if (lastRulesSource != null) {
             return false;
         }
-        String source = module + "\n" + local;
+        String source = module + "\u0000" + local;
         if (source.equals(lastRulesSource)) return false;
         lastRulesSource = source;
-        rules = Rule.parseAll(source);
-        Log.d("Правил загружено: " + rules.size());
+
+        List<Rule> out = new ArrayList<>();
+        addEnabled(out, RuleEntry.parseList(module));
+        addEnabled(out, RuleEntry.parseList(local));
+        rules = out;
+        Log.d("Правил загружено: " + out.size());
         return true;
+    }
+
+    private static void addEnabled(List<Rule> out, List<RuleEntry> entries) {
+        for (RuleEntry e : entries) {
+            if (!e.enabled) continue;
+            Rule r = Rule.parse(e.rule);
+            if (r != null) out.add(r);
+        }
     }
 
     static boolean isHostBlocked(String host) {

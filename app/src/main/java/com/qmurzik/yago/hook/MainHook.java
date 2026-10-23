@@ -116,6 +116,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (HookConfig.refresh(a)) ViewHider.rescanAll();
                 View decor = a.getWindow().getDecorView();
                 ViewHider.attachRoot(decor);
+                Fab.sync(a);
                 if (HookConfig.debugLog) {
                     decor.postDelayed(() -> dump(a.getClass().getName(), decor), 2000);
                 }
@@ -132,7 +133,19 @@ public class MainHook implements IXposedHookLoadPackage {
         XposedHelpers.findAndHookMethod(Activity.class, "dispatchTouchEvent", MotionEvent.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
-                Inspector.onTouch((Activity) param.thisObject, (MotionEvent) param.args[0]);
+                MotionEvent e = (MotionEvent) param.args[0];
+                if (Picker.onTouch((Activity) param.thisObject, e)) {
+                    // тап ушёл на выбор элемента — приложению отдаём отмену жеста
+                    MotionEvent cancel = MotionEvent.obtain(e);
+                    cancel.setAction(MotionEvent.ACTION_CANCEL);
+                    param.args[0] = cancel;
+                }
+            }
+        });
+        XposedHelpers.findAndHookMethod(Activity.class, "onPause", new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                Picker.onPause((Activity) param.thisObject);
             }
         });
     }

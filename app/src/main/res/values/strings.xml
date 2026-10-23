@@ -1,8 +1,76 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">YaGo Tweaks</string>
-    <string name="xposed_description">Кастомизация Яндекс Go: блокировка рекламы, скрытие элементов интерфейса по правилам, инспектор элементов. Без привязки к именам классов приложения.</string>
+    <string name="xposed_description">Кастомизация Яндекс Go: блокировка рекламы, скрытие любых элементов интерфейса прямо в приложении. Без привязки к именам классов приложения.</string>
     <string-array name="xposed_scope">
         <item>ru.yandex.taxi</item>
     </string-array>
+
+    <string name="master_switch">Модуль включён</string>
+    <string name="status_active">Модуль активен</string>
+    <string name="status_active_text">Изменения применяются при возврате в Яндекс Go</string>
+    <string name="status_off">Модуль выключен</string>
+    <string name="status_off_text">Все функции временно отключены</string>
+    <string name="status_inactive">Модуль не активен</string>
+    <string name="status_inactive_text">Включите его в LSPosed, отметьте Яндекс Go и перезапустите приложение</string>
+
+    <string name="section_hide">Скрытие элементов</string>
+    <string name="picker_help">В Яндекс Go удерживайте <b>два пальца</b> на экране ~1 секунду (или нажмите плавающую кнопку ✂). Нажмите на элемент — он подсветится. Кнопками «Шире» / «Уже» выберите, что именно скрыть: одну плитку или весь блок, затем «Скрыть элемент». Список скрытого — кнопка «Скрытые» там же.</string>
+    <string name="pref_inspector">Жест двумя пальцами</string>
+    <string name="pref_inspector_sum">Удержание двух пальцев открывает выбор элемента</string>
+    <string name="pref_fab">Плавающая кнопка</string>
+    <string name="pref_fab_sum">Кнопка ✂ поверх Яндекс Go, её можно перетаскивать</string>
+
+    <string name="section_rules">Свои правила</string>
+    <string name="rules_empty">Правила, созданные в Яндекс Go, хранятся в самом приложении. Здесь можно добавить правила вручную или импортировать скопированные из Яндекс Go.</string>
+    <string name="rules_add">Добавить</string>
+    <string name="rules_import">Импорт</string>
+    <string name="rules_export">Экспорт</string>
+    <string name="rules_imported">Импортировано правил: %d</string>
+    <string name="rules_import_none">В буфере обмена нет правил</string>
+    <string name="rules_exported">Правила скопированы</string>
+    <string name="rule_new">Новое правило</string>
+    <string name="rule_edit">Правило</string>
+    <string name="rule_label">Название (для себя)</string>
+    <string name="rule_type">Искать элемент по</string>
+    <string name="type_text">Тексту</string>
+    <string name="type_desc">Описанию</string>
+    <string name="type_id">ID</string>
+    <string name="type_class">Классу</string>
+    <string name="rule_value">Значение</string>
+    <string name="rule_regex">Регулярное выражение</string>
+    <string name="rule_up">Скрыть родителя уровня</string>
+    <string name="rule_up_help">0 — сам найденный элемент, 1 — его контейнер и т.д.</string>
+    <string name="rule_invalid">Неверное выражение</string>
+    <string name="save">Сохранить</string>
+    <string name="cancel">Отмена</string>
+    <string name="delete">Удалить</string>
+    <string name="deleted">Правило удалено</string>
+    <string name="undo">Вернуть</string>
+
+    <string name="section_ads">Реклама</string>
+    <string name="pref_block_hosts">Блокировать рекламные сети</string>
+    <string name="pref_block_hosts_sum">Яндекс Реклама, AdFox, Google Ads, myTarget и др.</string>
+    <string name="pref_block_analytics">Блокировать аналитику</string>
+    <string name="pref_block_analytics_sum">AppMetrica, Firebase, AppsFlyer. Может повлиять на работу отдельных функций</string>
+    <string name="pref_hide_ads">Скрывать рекламные блоки</string>
+    <string name="pref_hide_ads_sum">Элементы рекламных SDK и контейнеры с id вида ad_*, adview</string>
+    <string name="pref_hide_labeled">Скрывать карточки «Реклама»</string>
+    <string name="pref_hide_labeled_sum">Карточки в лентах с пометкой «Реклама», «Ad», «Sponsored»</string>
+
+    <string name="section_hosts">Свои домены для блокировки</string>
+    <string name="hosts_caption">Встроенный список: %1$d доменов. Добавленные домены блокируются вместе с поддоменами.</string>
+    <string name="hosts_add">Добавить домен</string>
+    <string name="hosts_hint">например, ads.example.com</string>
+
+    <string name="section_misc">Прочее</string>
+    <string name="pref_screenshots">Разрешить скриншоты</string>
+    <string name="pref_screenshots_sum">Снимает запрет на скриншоты и запись экрана</string>
+    <string name="pref_debug">Режим отладки</string>
+    <string name="pref_debug_sum">Дерево элементов экрана и заблокированные запросы в logcat (тег YaGo)</string>
+
+    <string name="btn_stop">Остановить</string>
+    <string name="btn_open">Открыть Яндекс Go</string>
+    <string name="not_installed">Яндекс Go не установлен</string>
+    <string name="version">Версия %1$s</string>
 </resources>

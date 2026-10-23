@@ -52,6 +52,8 @@ final class ViewHider {
     }
 
     private static final Map<View, Saved> hidden = new WeakHashMap<>();
+    /** Собственные элементы модуля (пикер, плавающая кнопка) — не трогаем. */
+    private static final Map<View, Boolean> ignored = new WeakHashMap<>();
     private static final Map<View, Boolean> roots = new WeakHashMap<>();
     private static final Map<View, Runnable> pending = new WeakHashMap<>();
     private static final Map<View, Long> lastScan = new WeakHashMap<>();
@@ -70,6 +72,14 @@ final class ViewHider {
         vto.addOnGlobalLayoutListener(() -> schedule(root));
         vto.addOnScrollChangedListener(() -> schedule(root));
         schedule(root);
+    }
+
+    static void ignore(View v) {
+        ignored.put(v, Boolean.TRUE);
+    }
+
+    static boolean isIgnored(View v) {
+        return ignored.containsKey(v);
     }
 
     static void rescanAll() {
@@ -103,7 +113,7 @@ final class ViewHider {
                 && (HookConfig.hideAdViews || HookConfig.hideAdLabeled || !HookConfig.rules.isEmpty());
         Set<View> targets = Collections.newSetFromMap(new IdentityHashMap<>());
         if (active && root.isAttachedToWindow()) {
-            walk(root, root, HookConfig.rules, targets);
+            walk(root, root, HookConfig.rules, true, targets);
         }
         for (View v : targets) hide(v);
 
@@ -117,7 +127,15 @@ final class ViewHider {
         if (!targets.isEmpty()) Log.d("Скрыто элементов: " + targets.size());
     }
 
-    private static void walk(View v, View root, List<Rule> rules, Set<View> targets) {
+    /** Что именно скрыло бы правило в этом окне (для проверки при создании правила). */
+    static Set<View> evaluate(View root, Rule rule) {
+        Set<View> targets = Collections.newSetFromMap(new IdentityHashMap<>());
+        walk(root, root, Collections.singletonList(rule), false, targets);
+        return targets;
+    }
+
+    private static void walk(View v, View root, List<Rule> rules, boolean heuristics, Set<View> targets) {
+        if (ignored.containsKey(v)) return;
         if (v != root) {
             for (int i = 0; i < rules.size(); i++) {
                 Rule r = rules.get(i);
@@ -126,8 +144,8 @@ final class ViewHider {
                     if (t != null && t != root) targets.add(t);
                 }
             }
-            if (HookConfig.hideAdViews && isAdView(v)) targets.add(v);
-            if (HookConfig.hideAdLabeled && v instanceof TextView) {
+            if (heuristics && HookConfig.hideAdViews && isAdView(v)) targets.add(v);
+            if (heuristics && HookConfig.hideAdLabeled && v instanceof TextView) {
                 CharSequence text = ((TextView) v).getText();
                 if (text != null && text.length() <= 40 && AD_LABEL.matcher(text).matches()) {
                     View card = findCard(v, root);
@@ -139,12 +157,12 @@ final class ViewHider {
             ViewGroup g = (ViewGroup) v;
             for (int i = 0, n = g.getChildCount(); i < n; i++) {
                 View c = g.getChildAt(i);
-                if (c != null) walk(c, root, rules, targets);
+                if (c != null) walk(c, root, rules, heuristics, targets);
             }
         }
     }
 
-    private static boolean matches(Rule r, View v) {
+    static boolean matches(Rule r, View v) {
         switch (r.type) {
             case ID:
                 return r.matches(idName(v));
