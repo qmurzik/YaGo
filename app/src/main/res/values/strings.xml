@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">YaGo Tweaks</string>
+    <string name="xposed_description">Кастомизация Яндекс Go: блокировка рекламы, скрытие элементов интерфейса по правилам, инспектор элементов. Без привязки к именам классов приложения.</string>
+    <string-array name="xposed_scope">
+        <item>ru.yandex.taxi</item>
+    </string-array>
+</resources>

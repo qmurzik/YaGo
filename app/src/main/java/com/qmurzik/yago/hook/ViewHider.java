@@ -1,0 +1,302 @@
+package com.qmurzik.yago.hook;
+
+import android.os.SystemClock;
+import android.util.SparseArray;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.view.ViewTreeObserver;
+import android.widget.AdapterView;
+import android.widget.HorizontalScrollView;
+import android.widget.ScrollView;
+import android.widget.TextView;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
+import java.util.regex.Pattern;
+
+/**
+ * Скрывает элементы интерфейса по правилам и эвристикам.
+ * Работает только с классами Android SDK, поэтому не зависит от версии приложения.
+ * Все методы вызываются в главном потоке.
+ */
+final class ViewHider {
+    private static final long MIN_INTERVAL_MS = 250;
+    private static final int MAX_CARD_DEPTH = 8;
+
+    /** Типичные id рекламных контейнеров (если имена ресурсов не обфусцированы). */
+    private static final Pattern AD_ID = Pattern.compile(
+            "(^|_)(ad|ads|adview|ad_view|advert|adverts|advertising|advertisement|admob|adfox|native_ad|banner_ad|ad_banner|ad_container|sponsored)(_|$)",
+            Pattern.CASE_INSENSITIVE);
+
+    /** Классы рекламных SDK (имена из публичного API SDK). */
+    private static final Pattern AD_CLASS = Pattern.compile(
+            "^(com\\.yandex\\.mobile\\.ads\\.|com\\.google\\.android\\.gms\\.ads\\.|com\\.my\\.target\\.|com\\.applovin\\.|com\\.unity3d\\.ads\\.)"
+                    + "|(AdView|NativeAdView|BannerAdView|AdContainer)$");
+
+    /** Пометка «Реклама» на карточке. */
+    private static final Pattern AD_LABEL = Pattern.compile(
+            "^\\s*(реклама|рекламa|ad|ads|advertisement|sponsored|спонсорский материал|партн[её]рский материал)(\\s*[·•|,.-]?\\s*(18|16|12|6|0)\\+)?\\s*$",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    private static final class Saved {
+        int visibility;
+        boolean lpZeroed;
+        int width, height, ml, mt, mr, mb;
+    }
+
+    private static final Map<View, Saved> hidden = new WeakHashMap<>();
+    private static final Map<View, Boolean> roots = new WeakHashMap<>();
+    private static final Map<View, Runnable> pending = new WeakHashMap<>();
+    private static final Map<View, Long> lastScan = new WeakHashMap<>();
+    private static final SparseArray<String> idNames = new SparseArray<>();
+    private static final Map<Class<?>, Boolean> adClassCache = new HashMap<>();
+    private static final Map<Class<?>, Boolean> scrollClassCache = new HashMap<>();
+
+    private ViewHider() {}
+
+    // ---------------------------------------------------------------- корни окон
+
+    static void attachRoot(final View root) {
+        if (root == null || roots.containsKey(root)) return;
+        roots.put(root, Boolean.TRUE);
+        ViewTreeObserver vto = root.getViewTreeObserver();
+        vto.addOnGlobalLayoutListener(() -> schedule(root));
+        vto.addOnScrollChangedListener(() -> schedule(root));
+        schedule(root);
+    }
+
+    static void rescanAll() {
+        for (View root : new ArrayList<>(roots.keySet())) {
+            lastScan.remove(root);
+            schedule(root);
+        }
+    }
+
+    static void schedule(final View root) {
+        if (pending.containsKey(root)) return;
+        Runnable r = () -> {
+            pending.remove(root);
+            lastScan.put(root, SystemClock.uptimeMillis());
+            try {
+                scan(root);
+            } catch (Throwable t) {
+                Log.e("Ошибка при обходе интерфейса", t);
+            }
+        };
+        pending.put(root, r);
+        Long last = lastScan.get(root);
+        long wait = last == null ? 16 : Math.max(16, MIN_INTERVAL_MS - (SystemClock.uptimeMillis() - last));
+        root.postDelayed(r, wait);
+    }
+
+    // ---------------------------------------------------------------- обход
+
+    private static void scan(View root) {
+        boolean active = HookConfig.enabled
+                && (HookConfig.hideAdViews || HookConfig.hideAdLabeled || !HookConfig.rules.isEmpty());
+        Set<View> targets = Collections.newSetFromMap(new IdentityHashMap<>());
+        if (active && root.isAttachedToWindow()) {
+            walk(root, root, HookConfig.rules, targets);
+        }
+        for (View v : targets) hide(v);
+
+        // Возвращаем элементы, которые больше не подходят под правила
+        // (например, переиспользованные ячейки списка).
+        List<View> restore = new ArrayList<>();
+        for (View v : hidden.keySet()) {
+            if (!targets.contains(v) && (v.getRootView() == root || !v.isAttachedToWindow())) restore.add(v);
+        }
+        for (View v : restore) show(v);
+        if (!targets.isEmpty()) Log.d("Скрыто элементов: " + targets.size());
+    }
+
+    private static void walk(View v, View root, List<Rule> rules, Set<View> targets) {
+        if (v != root) {
+            for (int i = 0; i < rules.size(); i++) {
+                Rule r = rules.get(i);
+                if (matches(r, v)) {
+                    View t = ancestor(v, r.up);
+                    if (t != null && t != root) targets.add(t);
+                }
+            }
+            if (HookConfig.hideAdViews && isAdView(v)) targets.add(v);
+            if (HookConfig.hideAdLabeled && v instanceof TextView) {
+                CharSequence text = ((TextView) v).getText();
+                if (text != null && text.length() <= 40 && AD_LABEL.matcher(text).matches()) {
+                    View card = findCard(v, root);
+                    if (card != null) targets.add(card);
+                }
+            }
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0, n = g.getChildCount(); i < n; i++) {
+                View c = g.getChildAt(i);
+                if (c != null) walk(c, root, rules, targets);
+            }
+        }
+    }
+
+    private static boolean matches(Rule r, View v) {
+        switch (r.type) {
+            case ID:
+                return r.matches(idName(v));
+            case TEXT:
+                if (!(v instanceof TextView)) return false;
+                CharSequence t = ((TextView) v).getText();
+                return t != null && r.matches(t.toString());
+            case DESC:
+                CharSequence d = v.getContentDescription();
+                return d != null && r.matches(d.toString());
+            case CLASS:
+                return r.matches(v.getClass().getName());
+        }
+        return false;
+    }
+
+    static View ancestor(View v, int up) {
+        View cur = v;
+        for (int i = 0; i < up; i++) {
+            ViewParent p = cur.getParent();
+            if (!(p instanceof View)) return null;
+            cur = (View) p;
+        }
+        return cur;
+    }
+
+    private static boolean isAdView(View v) {
+        Class<?> c = v.getClass();
+        Boolean cached = adClassCache.get(c);
+        if (cached == null) {
+            cached = Boolean.FALSE;
+            for (Class<?> k = c; k != null && k != View.class; k = k.getSuperclass()) {
+                String n = k.getName();
+                if (n.startsWith("android.")) break;
+                if (AD_CLASS.matcher(n).find()) {
+                    cached = Boolean.TRUE;
+                    break;
+                }
+            }
+            adClassCache.put(c, cached);
+        }
+        if (cached) return true;
+        String id = idName(v);
+        return id != null && AD_ID.matcher(id).find();
+    }
+
+    /** Ближайший предок, являющийся элементом прокручиваемого списка/ленты. */
+    private static View findCard(View label, View root) {
+        View cur = label;
+        for (int i = 0; i < MAX_CARD_DEPTH; i++) {
+            ViewParent p = cur.getParent();
+            if (!(p instanceof View) || p == root) return null;
+            if (isScrollContainer((View) p)) return cur;
+            cur = (View) p;
+        }
+        return null;
+    }
+
+    private static boolean isScrollContainer(View v) {
+        if (v instanceof AdapterView || v instanceof ScrollView || v instanceof HorizontalScrollView) return true;
+        Class<?> c = v.getClass();
+        Boolean cached = scrollClassCache.get(c);
+        if (cached == null) {
+            cached = Boolean.FALSE;
+            for (Class<?> k = c; k != null && k != View.class; k = k.getSuperclass()) {
+                String n = k.getSimpleName();
+                if (n.contains("RecyclerView") || n.contains("ScrollView") || n.contains("ViewPager")) {
+                    cached = Boolean.TRUE;
+                    break;
+                }
+            }
+            scrollClassCache.put(c, cached);
+        }
+        return cached;
+    }
+
+    static String idName(View v) {
+        int id = v.getId();
+        if (id == View.NO_ID || (id >>> 24) == 0) return null;
+        String name = idNames.get(id);
+        if (name == null) {
+            try {
+                name = v.getResources().getResourceEntryName(id);
+            } catch (Throwable t) {
+                name = "";
+            }
+            idNames.put(id, name);
+        }
+        return name.isEmpty() ? null : name;
+    }
+
+    // ---------------------------------------------------------------- скрытие
+
+    static boolean isHidden(View v) {
+        return hidden.containsKey(v);
+    }
+
+    /** Вызывается из хука View.setVisibility: запоминает желаемую видимость и не даёт показать элемент. */
+    static int onSetVisibility(View v, int visibility) {
+        Saved s = hidden.get(v);
+        if (s == null) return visibility;
+        s.visibility = visibility;
+        return View.GONE;
+    }
+
+    private static void hide(View v) {
+        Saved s = hidden.get(v);
+        if (s == null) {
+            s = new Saved();
+            s.visibility = v.getVisibility();
+            hidden.put(v, s);
+            v.setVisibility(View.GONE); // пройдёт через хук и останется GONE
+        }
+        // RecyclerView и похожие контейнеры не убирают место под GONE-элементом,
+        // поэтому дополнительно обнуляем размеры.
+        ViewParent p = v.getParent();
+        ViewGroup.LayoutParams lp = v.getLayoutParams();
+        if (p instanceof View && lp != null && isScrollContainer((View) p) && !(p instanceof ScrollView)
+                && !(p instanceof HorizontalScrollView)) {
+            if (!s.lpZeroed || lp.width != 0 || lp.height != 0) {
+                s.width = lp.width;
+                s.height = lp.height;
+                if (lp instanceof ViewGroup.MarginLayoutParams) {
+                    ViewGroup.MarginLayoutParams m = (ViewGroup.MarginLayoutParams) lp;
+                    s.ml = m.leftMargin;
+                    s.mt = m.topMargin;
+                    s.mr = m.rightMargin;
+                    s.mb = m.bottomMargin;
+                    m.setMargins(0, 0, 0, 0);
+                }
+                lp.width = 0;
+                lp.height = 0;
+                s.lpZeroed = true;
+                v.setLayoutParams(lp);
+            }
+        }
+    }
+
+    private static void show(View v) {
+        Saved s = hidden.remove(v);
+        if (s == null) return;
+        if (s.lpZeroed) {
+            ViewGroup.LayoutParams lp = v.getLayoutParams();
+            if (lp != null) {
+                lp.width = s.width;
+                lp.height = s.height;
+                if (lp instanceof ViewGroup.MarginLayoutParams) {
+                    ((ViewGroup.MarginLayoutParams) lp).setMargins(s.ml, s.mt, s.mr, s.mb);
+                }
+                v.setLayoutParams(lp);
+            }
+        }
+        v.setVisibility(s.visibility);
+    }
+}
