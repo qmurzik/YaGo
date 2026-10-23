@@ -398,9 +398,9 @@ final class Picker {
 
     @SuppressLint("SetTextI18n")
     private void hideSelected() {
-        View t = target();
+        final View t = target();
         if (t == null || candidates.isEmpty()) return;
-        RuleEntry e = new RuleEntry(RuleBuilder.label(t), candidates.get(chosen).rule, true);
+        final RuleEntry e = new RuleEntry(RuleBuilder.label(t), candidates.get(chosen).rule, true);
         List<RuleEntry> list = HookConfig.localRules(activity);
         list.add(e);
         HookConfig.setLocalRules(activity, list);
@@ -408,12 +408,37 @@ final class Picker {
         path = Collections.emptyList();
         index = -1;
         candidates = Collections.emptyList();
+
+        // применяем сразу и проверяем результат
+        ViewHider.attachRoot(decor);
+        ViewHider.scanNow(decor);
         ViewHider.rescanAll();
         update();
         placePanel();
         layer.invalidate();
-        status.setText("Скрыто: «" + e.title() + "».  Отменить");
+        Log.i("Скрытие «" + e.title() + "» правилом " + e.rule + ": " + ViewHider.diagnose(decor, t, e.rule));
+
+        if (t.getVisibility() == View.GONE) {
+            showStatus("Скрыто: «" + e.title() + "».  Отменить");
+        } else {
+            showStatus("Правило сохранено, но элемент не скрылся.\n" + ViewHider.diagnose(decor, t, e.rule)
+                    + "\nНажмите, чтобы отменить");
+        }
+        // приложение может заново показать элемент — проверяем чуть позже
+        decor.postDelayed(() -> {
+            if (current != this || lastAdded != e) return;
+            if (t.isAttachedToWindow() && t.isShown()) {
+                String d = ViewHider.diagnose(decor, t, e.rule);
+                Log.i("Элемент снова виден: " + d);
+                showStatus("Элемент снова показан приложением.\n" + d + "\nНажмите, чтобы отменить");
+            }
+        }, 700);
+    }
+
+    private void showStatus(String text) {
+        status.setText(text);
         status.setVisibility(View.VISIBLE);
+        placePanel();
     }
 
     private void undo() {

@@ -106,6 +106,33 @@ final class ViewHider {
         root.postDelayed(r, wait);
     }
 
+    /** Немедленный обход окна (без ожидания) — для проверки сразу после создания правила. */
+    static void scanNow(View root) {
+        Runnable r = pending.remove(root);
+        if (r != null) root.removeCallbacks(r);
+        lastScan.put(root, SystemClock.uptimeMillis());
+        scan(root);
+    }
+
+    /** Диагностика: почему элемент виден, хотя правило для него есть. */
+    static String diagnose(View root, View target, String ruleText) {
+        StringBuilder b = new StringBuilder();
+        b.append("enabled=").append(HookConfig.enabled);
+        b.append(", rules=").append(HookConfig.rules.size());
+        boolean loaded = false;
+        for (Rule r : HookConfig.rules) if (r.raw.equals(ruleText.trim())) loaded = true;
+        b.append(", загружено=").append(loaded);
+        Rule rule = Rule.parse(ruleText);
+        b.append(", разобрано=").append(rule != null);
+        if (rule != null) b.append(", находит=").append(evaluate(root, rule).contains(target));
+        b.append(", в списке скрытых=").append(hidden.containsKey(target));
+        b.append(", visibility=").append(target.getVisibility());
+        b.append(", attached=").append(target.isAttachedToWindow());
+        b.append(", rootOk=").append(target.getRootView() == root);
+        b.append(", корней=").append(roots.size()).append(", rootизвестен=").append(roots.containsKey(root));
+        return b.toString();
+    }
+
     // ---------------------------------------------------------------- обход
 
     private static void scan(View root) {
@@ -275,6 +302,11 @@ final class ViewHider {
             s.visibility = v.getVisibility();
             hidden.put(v, s);
             v.setVisibility(View.GONE); // пройдёт через хук и останется GONE
+        } else if (v.getVisibility() != View.GONE) {
+            // ART может встроить setVisibility в код приложения, и тогда хук его не видит:
+            // приложение снова показало элемент — запоминаем и прячем заново.
+            s.visibility = v.getVisibility();
+            v.setVisibility(View.GONE);
         }
         // RecyclerView и похожие контейнеры не убирают место под GONE-элементом,
         // поэтому дополнительно обнуляем размеры.
