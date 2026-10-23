@@ -133,13 +133,7 @@ public class MainHook implements IXposedHookLoadPackage {
         XposedHelpers.findAndHookMethod(Activity.class, "dispatchTouchEvent", MotionEvent.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
-                MotionEvent e = (MotionEvent) param.args[0];
-                if (Picker.onTouch((Activity) param.thisObject, e)) {
-                    // тап ушёл на выбор элемента — приложению отдаём отмену жеста
-                    MotionEvent cancel = MotionEvent.obtain(e);
-                    cancel.setAction(MotionEvent.ACTION_CANCEL);
-                    param.args[0] = cancel;
-                }
+                Picker.onTouch((Activity) param.thisObject, (MotionEvent) param.args[0]);
             }
         });
         XposedHelpers.findAndHookMethod(Activity.class, "onPause", new XC_MethodHook() {

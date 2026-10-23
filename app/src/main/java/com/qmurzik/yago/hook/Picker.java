@@ -9,7 +9,6 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -39,7 +38,6 @@ import java.util.List;
  */
 final class Picker {
     private static final long HOLD_MS = 1000;
-    private static final long TAP_MS = 450;
     private static final float SLOP_DP = 16;
 
     private static Picker current;
@@ -65,9 +63,10 @@ final class Picker {
     private RuleEntry lastAdded;
     private final Rect lastRect = new Rect();
 
-    private float downX, downY;
-    private long downTime;
-    private boolean tracking, inPanel;
+    // касания слоя: тап — выбор, движение — передаём приложению
+    private MotionEvent down;
+    private boolean forwarding;
+    private View forwardTarget;
 
     // ================================================================ открытие/закрытие
 
@@ -99,49 +98,9 @@ final class Picker {
 
     // ================================================================ касания
 
-    /**
-     * Вызывается из Activity.dispatchTouchEvent.
-     * @return true — событие нужно заменить на ACTION_CANCEL (тап ушёл на выбор элемента).
-     */
-    static boolean onTouch(Activity a, MotionEvent e) {
-        if (current != null && current.activity == a) return current.handleTouch(e);
-        if (HookConfig.enabled && HookConfig.inspector) detectHold(a, e);
-        return false;
-    }
-
-    private boolean handleTouch(MotionEvent e) {
-        float slop = ui.dp(SLOP_DP);
-        switch (e.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN:
-                inPanel = contains(panel, e.getRawX(), e.getRawY());
-                tracking = !inPanel;
-                downX = e.getRawX();
-                downY = e.getRawY();
-                downTime = SystemClock.uptimeMillis();
-                return false;
-            case MotionEvent.ACTION_POINTER_DOWN:
-                tracking = false;
-                return false;
-            case MotionEvent.ACTION_MOVE:
-                if (tracking && Math.hypot(e.getRawX() - downX, e.getRawY() - downY) > slop) tracking = false;
-                return false;
-            case MotionEvent.ACTION_UP:
-                if (tracking && SystemClock.uptimeMillis() - downTime < TAP_MS) {
-                    tracking = false;
-                    selectAt((int) downX, (int) downY);
-                    return true;
-                }
-                return false;
-            default:
-                return false;
-        }
-    }
-
-    private static boolean contains(View v, float rawX, float rawY) {
-        if (v.getVisibility() != View.VISIBLE) return false;
-        int[] loc = new int[2];
-        v.getLocationOnScreen(loc);
-        return rawX >= loc[0] && rawY >= loc[1] && rawX < loc[0] + v.getWidth() && rawY < loc[1] + v.getHeight();
+    /** Вызывается из Activity.dispatchTouchEvent: ловит жест открытия, пока пикер закрыт. */
+    static void onTouch(Activity a, MotionEvent e) {
+        if (current == null && HookConfig.enabled && HookConfig.inspector) detectHold(a, e);
     }
 
     private static void detectHold(final Activity a, MotionEvent e) {
@@ -203,14 +162,19 @@ final class Picker {
         decor = (ViewGroup) a.getWindow().getDecorView();
 
         layer = new HighlightLayer();
+        // касания и отрисовка в ViewGroup идут с учётом Z: ставим слой и панель выше всего
+        layer.setTranslationZ(ui.dp(1000));
         ViewHider.ignore(layer);
         decor.addView(layer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         panel = new LinearLayout(a);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(ui.dp(16), ui.dp(12), ui.dp(16), ui.dp(16));
-        panel.setBackground(Ui.round(ui.surface, ui.dp(24)));
-        panel.setElevation(ui.dp(12));
+        android.graphics.drawable.GradientDrawable bg = Ui.round(ui.surface, ui.dp(24));
+        bg.setStroke(Math.max(1, ui.dp(1)), ui.outline);
+        panel.setBackground(bg);
+        panel.setTranslationZ(ui.dp(1001));
+        panel.setOutlineProvider(null); // без гигантской тени от большого Z
         panel.setClickable(true); // касания по панели не уходят в приложение
         ViewHider.ignore(panel);
 
@@ -497,6 +461,85 @@ final class Picker {
             parent.setStyle(Paint.Style.STROKE);
             parent.setStrokeWidth(ui.dp(1));
             parent.setPathEffect(new android.graphics.DashPathEffect(new float[]{ui.dp(4), ui.dp(4)}, 0));
+        }
+
+        /**
+         * Слой лежит поверх окна и первым получает касания, независимо от того,
+         * как приложение обрабатывает их в Activity. Тап без движения выбирает
+         * элемент и в приложение не попадает; как только палец сдвинулся или
+         * появился второй палец — весь жест передаётся приложению (прокрутка, карта).
+         */
+        @Override
+        public boolean dispatchTouchEvent(MotionEvent e) {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    recycleDown();
+                    down = MotionEvent.obtain(e);
+                    forwarding = false;
+                    return true;
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    startForwarding();
+                    forward(e);
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (!forwarding && down != null
+                            && Math.hypot(e.getX() - down.getX(), e.getY() - down.getY()) > ui.dp(SLOP_DP)) {
+                        startForwarding();
+                    }
+                    if (forwarding) forward(e);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    if (forwarding) {
+                        forward(e);
+                    } else if (down != null) {
+                        selectAt((int) down.getRawX(), (int) down.getRawY());
+                    }
+                    finishGesture();
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    if (forwarding) forward(e);
+                    finishGesture();
+                    return true;
+                default:
+                    if (forwarding) forward(e);
+                    return true;
+            }
+        }
+
+        private void startForwarding() {
+            if (forwarding) return;
+            forwarding = true;
+            forwardTarget = null;
+            for (int i = decor.getChildCount() - 1; i >= 0; i--) {
+                View c = decor.getChildAt(i);
+                if (!ViewHider.isIgnored(c) && c.getVisibility() == View.VISIBLE) {
+                    forwardTarget = c;
+                    break;
+                }
+            }
+            if (down != null) forward(down);
+        }
+
+        private void forward(MotionEvent e) {
+            View t = forwardTarget;
+            if (t == null) return;
+            MotionEvent copy = MotionEvent.obtain(e);
+            copy.offsetLocation(getLeft() - t.getLeft(), getTop() - t.getTop());
+            t.dispatchTouchEvent(copy);
+            copy.recycle();
+        }
+
+        private void finishGesture() {
+            forwarding = false;
+            forwardTarget = null;
+            recycleDown();
+        }
+
+        private void recycleDown() {
+            if (down != null) {
+                down.recycle();
+                down = null;
+            }
         }
 
         @Override

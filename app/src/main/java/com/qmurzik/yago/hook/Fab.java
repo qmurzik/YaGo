@@ -46,6 +46,8 @@ final class Fab {
         b.setGravity(Gravity.CENTER);
         b.setBackground(Ui.round(Ui.ACCENT, ui.dp(24)));
         b.setElevation(ui.dp(8));
+        b.setTranslationZ(ui.dp(900));
+        b.setOutlineProvider(null);
         b.setAlpha(0.85f);
         b.setContentDescription("YaGo: скрыть элемент");
         int size = ui.dp(48);
