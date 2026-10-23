@@ -31,10 +31,16 @@ final class Rule {
     final Type type;
     final Pattern pattern;
     final int up;
+    /** Номера дочерних элементов для спуска после подъёма на up уровней. */
+    final int[] path;
+    /** Скрыть, сохранив место (INVISIBLE вместо GONE). */
+    final boolean keep;
     final String raw;
 
-    private Rule(Type type, Pattern pattern, int up, String raw) {
+    private Rule(Type type, Pattern pattern, int up, int[] path, boolean keep, String raw) {
         this.type = type;
+        this.path = path;
+        this.keep = keep;
         this.pattern = pattern;
         this.up = up;
         this.raw = raw;
@@ -58,7 +64,13 @@ final class Rule {
             return null;
         }
         int up = m.group(3) == null ? 0 : Integer.parseInt(m.group(3));
-        return new Rule(type, p, up, s);
+        int[] path = new int[0];
+        if (m.group(4) != null) {
+            String[] parts = m.group(4).substring(1).split(">");
+            path = new int[parts.length];
+            for (int i = 0; i < parts.length; i++) path[i] = Integer.parseInt(parts[i]);
+        }
+        return new Rule(type, p, up, path, m.group(5) != null, s);
     }
 
     static List<Rule> parseAll(String text) {
@@ -69,6 +81,17 @@ final class Rule {
             if (r != null) out.add(r);
         }
         return out;
+    }
+
+    /** Элемент, который скрывает правило, если оно сработало на matched (или null). */
+    android.view.View target(android.view.View matched) {
+        android.view.View t = ViewHider.ancestor(matched, up);
+        for (int i = 0; t != null && i < path.length; i++) {
+            if (!(t instanceof android.view.ViewGroup)) return null;
+            android.view.ViewGroup g = (android.view.ViewGroup) t;
+            t = path[i] < g.getChildCount() ? g.getChildAt(path[i]) : null;
+        }
+        return t;
     }
 
     boolean matches(String value) {

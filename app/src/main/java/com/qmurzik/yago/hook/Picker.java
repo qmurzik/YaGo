@@ -64,6 +64,11 @@ final class Picker {
     private int index = -1;
     private List<RuleBuilder.Candidate> candidates = Collections.emptyList();
     private int chosen;
+    /** Пользователь сам выбрал неточный вариант (задевает несколько элементов). */
+    private boolean confirmedInexact;
+    /** Скрывать, оставляя место (не сдвигая и не растягивая соседей). Запоминается между открытиями. */
+    private static boolean keepSpace;
+    private TextView spaceToggle;
     private RuleEntry lastAdded;
     private final Rect lastRect = new Rect();
 
@@ -230,13 +235,22 @@ final class Picker {
         narrower.setOnClickListener(v -> safe(() -> move(1)));
         hiddenList.setOnClickListener(v -> safe(() -> RulesDialog.show(activity, ui, this::refreshCounters)));
 
+        LinearLayout row3 = new LinearLayout(a);
+        spaceToggle = ui.button("", false);
+        spaceToggle.setOnClickListener(v -> {
+            keepSpace = !keepSpace;
+            update();
+        });
         hide = ui.button("Скрыть элемент", true);
         hide.setOnClickListener(v -> safe(() -> hideSelected()));
         hide.setOnLongClickListener(v -> {
             safe(this::showAlternatives);
             return true;
         });
-        panel.addView(hide, lp(8));
+        row3.addView(spaceToggle, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        row3.addView(hide, weighted(ui.dp(8)));
+        panel.addView(row3, lp(8));
 
         status = ui.text("", 13, ui.onSurface, false);
         status.setBackground(Ui.round(ui.tonal, ui.dp(12)));
@@ -380,6 +394,7 @@ final class Picker {
         View t = target();
         candidates = t == null ? Collections.emptyList() : RuleBuilder.build(decor, t);
         chosen = 0;
+        confirmedInexact = false;
         update();
         placePanel();
         layer.invalidate();
@@ -389,6 +404,7 @@ final class Picker {
     private void update() {
         View t = target();
         refreshCounters();
+        spaceToggle.setText(keepSpace ? "Место: оставить" : "Место: убрать");
         if (t == null) {
             title.setText("Выберите элемент");
             subtitle.setText("Нажмите на то, что хотите скрыть. Повторный тап в то же место — элемент под ним. "
@@ -411,8 +427,15 @@ final class Picker {
             setEnabled(hide, false);
         } else {
             RuleBuilder.Candidate c = candidates.get(chosen);
-            ruleView.setText(c.rule + "\n" + c.explain() + (candidates.size() > 1 ? " · ещё варианты ›" : ""));
-            setEnabled(hide, true);
+            String more = candidates.size() > 1 ? " · варианты ›" : "";
+            if (c.exact() || confirmedInexact) {
+                ruleView.setText(finalRule(c) + "\n" + c.explain() + more);
+                setEnabled(hide, true);
+            } else {
+                ruleView.setText("Нет правила только для этого элемента: лучшее заденет " + c.matches
+                        + " шт. Попробуйте «Шире»/«Уже» или нажмите сюда, чтобы выбрать вариант вручную ›");
+                setEnabled(hide, false);
+            }
         }
         setEnabled(wider, index > 0);
         setEnabled(narrower, index < path.size() - 1);
@@ -430,8 +453,12 @@ final class Picker {
         v.setAlpha(on ? 1f : 0.4f);
     }
 
+    private static String finalRule(RuleBuilder.Candidate c) {
+        return keepSpace ? c.rule + " keep" : c.rule;
+    }
+
     private void showAlternatives() {
-        if (candidates.size() < 2) return;
+        if (candidates.isEmpty()) return;
         String[] items = new String[candidates.size()];
         for (int i = 0; i < items.length; i++) {
             RuleBuilder.Candidate c = candidates.get(i);
@@ -441,6 +468,7 @@ final class Picker {
                 .setTitle("Как узнавать этот элемент")
                 .setSingleChoiceItems(items, chosen, (dlg, which) -> {
                     chosen = which;
+                    confirmedInexact = !candidates.get(which).exact();
                     update();
                     dlg.dismiss();
                 })
@@ -452,7 +480,7 @@ final class Picker {
     private void hideSelected() {
         final View t = target();
         if (t == null || candidates.isEmpty()) return;
-        final RuleEntry e = new RuleEntry(RuleBuilder.label(t), candidates.get(chosen).rule, true);
+        final RuleEntry e = new RuleEntry(RuleBuilder.label(t), finalRule(candidates.get(chosen)), true);
         List<RuleEntry> list = HookConfig.localRules(activity);
         list.add(e);
         HookConfig.setLocalRules(activity, list);
@@ -472,7 +500,7 @@ final class Picker {
         layer.invalidate();
         Log.i("Скрытие «" + e.title() + "» правилом " + e.rule + ": " + ViewHider.diagnose(decor, t, e.rule));
 
-        if (t.getVisibility() == View.GONE) {
+        if (t.getVisibility() != View.VISIBLE) {
             showStatus("Скрыто: «" + e.title() + "».  Отменить");
         } else {
             showStatus("Правило сохранено, но элемент не скрылся.\n" + ViewHider.diagnose(decor, t, e.rule)

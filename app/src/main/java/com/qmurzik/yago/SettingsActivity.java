@@ -258,6 +258,10 @@ public class SettingsActivity extends AppCompatActivity {
             up.setText("0");
         }
 
+        // путь вниз (>i>j) и keep из пикера в редакторе не показываем, но сохраняем
+        String[] partsForExtra = existing != null ? RuleEntry.split(existing.rule) : null;
+        final String keptPath = partsForExtra != null ? partsForExtra[3] : "";
+        final boolean keptKeep = partsForExtra != null && !partsForExtra[4].isEmpty();
         final String[] result = new String[1];
         final Runnable refresh = () -> {
             String t = TYPES[0];
@@ -279,7 +283,7 @@ public class SettingsActivity extends AppCompatActivity {
             try {
                 Pattern.compile(pattern);
                 valueLayout.setError(null);
-                result[0] = RuleEntry.compose(t, pattern, level);
+                result[0] = RuleEntry.compose(t, pattern, level, keptPath, keptKeep);
                 preview.setText(result[0]);
             } catch (PatternSyntaxException ex) {
                 valueLayout.setError(getString(R.string.rule_invalid));

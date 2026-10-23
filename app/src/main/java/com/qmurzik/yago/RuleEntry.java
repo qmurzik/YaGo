@@ -11,9 +11,13 @@ import java.util.regex.Pattern;
 
 /** Правило скрытия с подписью и флагом включения. Хранится в настройках как JSON-массив. */
 public final class RuleEntry {
-    /** Синтаксис строки правила: «тип:выражение [^N]». */
+    /**
+     * Синтаксис строки правила: «тип:выражение [^N] [>i>j…] [keep]».
+     * ^N — подняться на N родителей от найденного элемента, >i>j — затем спуститься
+     * по номерам дочерних элементов, keep — скрыть, но оставить место.
+     */
     public static final Pattern LINE = Pattern.compile(
-            "^(id|text|desc|class)\\s*:\\s*(.+?)(?:\\s+\\^(\\d{1,2}))?\\s*$",
+            "^(id|text|desc|class)\\s*:\\s*(.+?)(?:\\s+\\^(\\d{1,2}))?(?:\\s+((?:>\\d{1,3})+))?(?:\\s+(keep))?\\s*$",
             Pattern.CASE_INSENSITIVE);
 
     public String label;
@@ -85,15 +89,22 @@ public final class RuleEntry {
         return a.toString();
     }
 
-    /** Разбирает строку правила на {тип, выражение, уровень} или возвращает null. */
+    /** Разбирает строку правила на {тип, выражение, уровень, путь, keep} или возвращает null. */
     public static String[] split(String rule) {
         Matcher m = LINE.matcher(rule.trim());
         if (!m.matches()) return null;
-        return new String[]{m.group(1).toLowerCase(java.util.Locale.ROOT), m.group(2), m.group(3) == null ? "0" : m.group(3)};
+        return new String[]{m.group(1).toLowerCase(java.util.Locale.ROOT), m.group(2),
+                m.group(3) == null ? "0" : m.group(3), m.group(4) == null ? "" : m.group(4),
+                m.group(5) == null ? "" : "keep"};
     }
 
     public static String compose(String type, String pattern, int up) {
-        return type + ":" + pattern + (up > 0 ? " ^" + up : "");
+        return compose(type, pattern, up, "", false);
+    }
+
+    public static String compose(String type, String pattern, int up, String path, boolean keep) {
+        return type + ":" + pattern + (up > 0 ? " ^" + up : "") + (path.isEmpty() ? "" : " " + path)
+                + (keep ? " keep" : "");
     }
 
     /** Экранирует строку для использования в правиле как литерал. */

@@ -152,9 +152,20 @@ final class HookConfig {
     private static void addEnabled(List<Rule> out, List<RuleEntry> entries) {
         for (RuleEntry e : entries) {
             if (!e.enabled || disabled.contains(e.rule.trim())) continue;
+            if (isLibraryClassRule(e.rule)) {
+                // такие правила составляли старые версии пикера — они скрывали все элементы библиотеки
+                Log.w("Пропускаю правило по общему классу библиотеки: " + e.rule);
+                continue;
+            }
             Rule r = Rule.parse(e.rule);
             if (r != null) out.add(r);
         }
+    }
+
+    private static boolean isLibraryClassRule(String rule) {
+        String r = rule.trim();
+        return r.startsWith("class:") && (r.contains("com\\.yandex\\.div\\.") || r.contains("androidx\\.")
+                || r.contains("^android\\."));
     }
 
     private static void applyDisabled() {

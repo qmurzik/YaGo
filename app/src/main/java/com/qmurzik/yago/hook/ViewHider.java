@@ -48,6 +48,8 @@ final class ViewHider {
 
     private static final class Saved {
         int visibility;
+        /** GONE или INVISIBLE («оставить место»). */
+        int mode = View.GONE;
         boolean lpZeroed;
         int width, height, ml, mt, mr, mb;
     }
@@ -153,9 +155,10 @@ final class ViewHider {
         boolean active = HookConfig.enabled
                 && (HookConfig.hideAdViews || HookConfig.hideAdLabeled || !HookConfig.rules.isEmpty());
         Map<View, String> targets = new IdentityHashMap<>();
+        Set<View> keep = Collections.newSetFromMap(new IdentityHashMap<>());
         if (active && root.isAttachedToWindow()) {
-            walk(root, root, HookConfig.rules, true, targets);
-            escalateEmptyParents(root, targets);
+            walk(root, root, HookConfig.rules, true, targets, keep);
+            escalateEmptyParents(root, targets, keep);
         }
         boolean fresh = false;
         for (Map.Entry<View, String> t : targets.entrySet()) {
@@ -169,7 +172,7 @@ final class ViewHider {
                     recentTime = SystemClock.uptimeMillis();
                 }
             }
-            hide(t.getKey());
+            hide(t.getKey(), keep.contains(t.getKey()));
         }
 
         // Возвращаем элементы, которые больше не подходят под правила
@@ -186,8 +189,9 @@ final class ViewHider {
      * Контейнер, у которого не осталось ни одного видимого элемента, скрываем целиком.
      * Пустой контейнер бесполезен, а некоторые (сетка DivKit) на пустом списке падают.
      */
-    private static void escalateEmptyParents(View root, Map<View, String> targets) {
-        ArrayDeque<View> queue = new ArrayDeque<>(targets.keySet());
+    private static void escalateEmptyParents(View root, Map<View, String> targets, Set<View> keep) {
+        ArrayDeque<View> queue = new ArrayDeque<>();
+        for (View v : targets.keySet()) if (!keep.contains(v)) queue.add(v); // «оставить место» не освобождает контейнер
         while (!queue.isEmpty()) {
             View v = queue.poll();
             ViewParent p = v.getParent();
@@ -196,7 +200,7 @@ final class ViewHider {
             boolean anyVisible = false;
             for (int i = 0; i < g.getChildCount(); i++) {
                 View c = g.getChildAt(i);
-                if (c == null || ignored.containsKey(c) || targets.containsKey(c)) continue;
+                if (c == null || ignored.containsKey(c) || (targets.containsKey(c) && !keep.contains(c))) continue;
                 if (c.getVisibility() != View.GONE) {
                     anyVisible = true;
                     break;
@@ -212,18 +216,22 @@ final class ViewHider {
     /** Что именно скрыло бы правило в этом окне (для проверки при создании правила). */
     static Set<View> evaluate(View root, Rule rule) {
         Map<View, String> targets = new IdentityHashMap<>();
-        walk(root, root, Collections.singletonList(rule), false, targets);
+        walk(root, root, Collections.singletonList(rule), false, targets, new java.util.HashSet<>());
         return targets.keySet();
     }
 
-    private static void walk(View v, View root, List<Rule> rules, boolean heuristics, Map<View, String> targets) {
+    private static void walk(View v, View root, List<Rule> rules, boolean heuristics, Map<View, String> targets,
+                             Set<View> keep) {
         if (ignored.containsKey(v)) return;
         if (v != root) {
             for (int i = 0; i < rules.size(); i++) {
                 Rule r = rules.get(i);
                 if (matches(r, v)) {
-                    View t = ancestor(v, r.up);
-                    if (t != null && t != root && !targets.containsKey(t)) targets.put(t, r.raw);
+                    View t = r.target(v);
+                    if (t != null && t != root && !ignored.containsKey(t) && !targets.containsKey(t)) {
+                        targets.put(t, r.raw);
+                        if (r.keep) keep.add(t);
+                    }
                 }
             }
             if (heuristics && HookConfig.hideAdViews && isAdView(v) && !targets.containsKey(v)) targets.put(v, SRC_ADS);
@@ -239,7 +247,7 @@ final class ViewHider {
             ViewGroup g = (ViewGroup) v;
             for (int i = 0, n = g.getChildCount(); i < n; i++) {
                 View c = g.getChildAt(i);
-                if (c != null) walk(c, root, rules, heuristics, targets);
+                if (c != null) walk(c, root, rules, heuristics, targets, keep);
             }
         }
     }
@@ -347,29 +355,43 @@ final class ViewHider {
         Saved s = hidden.get(v);
         if (s == null) return visibility;
         s.visibility = visibility;
-        return View.GONE;
+        return visibility == View.GONE ? View.GONE : s.mode;
     }
 
-    private static void hide(View v) {
+    private static void hide(View v, boolean keepSpace) {
+        int mode = keepSpace ? View.INVISIBLE : View.GONE;
         Saved s = hidden.get(v);
         if (s == null) {
             s = new Saved();
             s.visibility = v.getVisibility();
+            s.mode = mode;
             hidden.put(v, s);
-            v.setVisibility(View.GONE); // пройдёт через хук и останется GONE
-        } else if (v.getVisibility() != View.GONE) {
-            // ART может встроить setVisibility в код приложения, и тогда хук его не видит:
-            // приложение снова показало элемент — запоминаем и прячем заново.
-            s.visibility = v.getVisibility();
-            v.setVisibility(View.GONE);
+            v.setVisibility(mode); // пройдёт через хук и останется скрытым
+        } else {
+            if (s.mode != mode) {
+                s.mode = mode;
+                if (keepSpace) restoreLp(v, s);
+            }
+            if (v.getVisibility() == View.VISIBLE) {
+                // ART может встроить setVisibility в код приложения, и тогда хук его не видит:
+                // приложение снова показало элемент — запоминаем и прячем заново.
+                s.visibility = View.VISIBLE;
+                v.setVisibility(mode);
+            }
         }
+        if (keepSpace) return;
         // RecyclerView и похожие контейнеры не убирают место под GONE-элементом,
-        // поэтому дополнительно обнуляем размеры.
+        // поэтому обнуляем размер вдоль направления прокрутки (поперёк — не трогаем,
+        // иначе соседние элементы сетки растягиваются).
         ViewParent p = v.getParent();
         ViewGroup.LayoutParams lp = v.getLayoutParams();
         if (p instanceof View && lp != null && isScrollContainer((View) p) && !(p instanceof ScrollView)
                 && !(p instanceof HorizontalScrollView)) {
-            if (!s.lpZeroed || lp.width != 0 || lp.height != 0) {
+            View pv = (View) p;
+            boolean horizontal = pv.canScrollHorizontally(1) || pv.canScrollHorizontally(-1)
+                    || p instanceof HorizontalScrollView;
+            boolean zeroed = horizontal ? lp.width == 0 : lp.height == 0;
+            if (!s.lpZeroed || !zeroed) {
                 s.width = lp.width;
                 s.height = lp.height;
                 if (lp instanceof ViewGroup.MarginLayoutParams) {
@@ -378,30 +400,34 @@ final class ViewHider {
                     s.mt = m.topMargin;
                     s.mr = m.rightMargin;
                     s.mb = m.bottomMargin;
-                    m.setMargins(0, 0, 0, 0);
+                    if (horizontal) m.setMargins(0, m.topMargin, 0, m.bottomMargin);
+                    else m.setMargins(m.leftMargin, 0, m.rightMargin, 0);
                 }
-                lp.width = 0;
-                lp.height = 0;
+                if (horizontal) lp.width = 0;
+                else lp.height = 0;
                 s.lpZeroed = true;
                 v.setLayoutParams(lp);
             }
         }
     }
 
+    private static void restoreLp(View v, Saved s) {
+        if (!s.lpZeroed) return;
+        s.lpZeroed = false;
+        ViewGroup.LayoutParams lp = v.getLayoutParams();
+        if (lp == null) return;
+        lp.width = s.width;
+        lp.height = s.height;
+        if (lp instanceof ViewGroup.MarginLayoutParams) {
+            ((ViewGroup.MarginLayoutParams) lp).setMargins(s.ml, s.mt, s.mr, s.mb);
+        }
+        v.setLayoutParams(lp);
+    }
+
     private static void show(View v) {
         Saved s = hidden.remove(v);
         if (s == null) return;
-        if (s.lpZeroed) {
-            ViewGroup.LayoutParams lp = v.getLayoutParams();
-            if (lp != null) {
-                lp.width = s.width;
-                lp.height = s.height;
-                if (lp instanceof ViewGroup.MarginLayoutParams) {
-                    ((ViewGroup.MarginLayoutParams) lp).setMargins(s.ml, s.mt, s.mr, s.mb);
-                }
-                v.setLayoutParams(lp);
-            }
-        }
+        restoreLp(v, s);
         v.setVisibility(s.visibility);
     }
 }
