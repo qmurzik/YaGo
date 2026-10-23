@@ -205,7 +205,7 @@ final class Picker {
         ruleView.setPadding(ui.dp(10), ui.dp(8), ui.dp(10), ui.dp(8));
         ruleView.setMaxLines(3);
         ruleView.setEllipsize(TextUtils.TruncateAt.END);
-        ruleView.setOnClickListener(v -> showAlternatives());
+        ruleView.setOnClickListener(v -> safe(() -> showAlternatives()));
         panel.addView(ruleView, lp(10));
 
         LinearLayout row = new LinearLayout(a);
@@ -216,14 +216,14 @@ final class Picker {
         row.addView(narrower, weighted(ui.dp(8)));
         row.addView(hiddenList, weighted(ui.dp(8)));
         panel.addView(row, lp(12));
-        wider.setOnClickListener(v -> move(-1));
-        narrower.setOnClickListener(v -> move(1));
-        hiddenList.setOnClickListener(v -> RulesDialog.show(activity, ui, this::refreshCounters));
+        wider.setOnClickListener(v -> safe(() -> move(-1)));
+        narrower.setOnClickListener(v -> safe(() -> move(1)));
+        hiddenList.setOnClickListener(v -> safe(() -> RulesDialog.show(activity, ui, this::refreshCounters)));
 
         hide = ui.button("Скрыть элемент", true);
-        hide.setOnClickListener(v -> hideSelected());
+        hide.setOnClickListener(v -> safe(() -> hideSelected()));
         hide.setOnLongClickListener(v -> {
-            showAlternatives();
+            safe(this::showAlternatives);
             return true;
         });
         panel.addView(hide, lp(8));
@@ -232,7 +232,7 @@ final class Picker {
         status.setBackground(Ui.round(ui.tonal, ui.dp(12)));
         status.setPadding(ui.dp(12), ui.dp(10), ui.dp(12), ui.dp(10));
         status.setVisibility(View.GONE);
-        status.setOnClickListener(v -> undo());
+        status.setOnClickListener(v -> safe(() -> undo()));
         panel.addView(status, lp(8));
 
         decor.addView(panel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
@@ -252,6 +252,23 @@ final class Picker {
 
         update();
         placePanel();
+    }
+
+    /** Ошибка модуля не должна ронять Яндекс Go: пишем в лог и показываем коротко. */
+    private void safe(Runnable r) {
+        try {
+            r.run();
+        } catch (Throwable t) {
+            fail(t);
+        }
+    }
+
+    private void fail(Throwable t) {
+        Log.e("Ошибка пикера", t);
+        try {
+            Toast.makeText(activity, "YaGo: ошибка — " + t, Toast.LENGTH_LONG).show();
+        } catch (Throwable ignored) {
+        }
     }
 
     private LinearLayout.LayoutParams lp(int topDp) {
@@ -471,6 +488,16 @@ final class Picker {
          */
         @Override
         public boolean dispatchTouchEvent(MotionEvent e) {
+            try {
+                return handleTouch(e);
+            } catch (Throwable t) {
+                fail(t);
+                finishGesture();
+                return true;
+            }
+        }
+
+        private boolean handleTouch(MotionEvent e) {
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     recycleDown();

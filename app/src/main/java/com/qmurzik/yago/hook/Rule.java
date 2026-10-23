@@ -7,7 +7,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
 
 /**
  * Правило скрытия элемента.
@@ -52,9 +51,10 @@ final class Rule {
         Type type = Type.valueOf(m.group(1).toUpperCase(java.util.Locale.ROOT));
         Pattern p;
         try {
-            p = Pattern.compile(m.group(2), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.UNICODE_CHARACTER_CLASS);
-        } catch (PatternSyntaxException e) {
-            Log.w("Ошибка в выражении правила " + s + ": " + e.getDescription());
+            // \s, \d и \b в Android (ICU) и так понимают Unicode; UNICODE_CHARACTER_CLASS там не поддерживается
+            p = Pattern.compile(m.group(2), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+        } catch (IllegalArgumentException e) {
+            Log.w("Ошибка в выражении правила " + s + ": " + e.getMessage());
             return null;
         }
         int up = m.group(3) == null ? 0 : Integer.parseInt(m.group(3));

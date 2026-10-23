@@ -87,7 +87,11 @@ final class Fab {
                             savedY = Math.max(0.05f, Math.min(0.92f, v.getY() / Math.max(1, decor.getHeight())));
                             place(v, decor, ui);
                         } else {
-                            Picker.open(a, -1, -1);
+                            try {
+                                Picker.open(a, -1, -1);
+                            } catch (Throwable t) {
+                                Log.e("Ошибка пикера", t);
+                            }
                         }
                         return true;
                     default:
