@@ -72,8 +72,32 @@ final class ViewHider {
         if (root == null || roots.containsKey(root)) return;
         roots.put(root, Boolean.TRUE);
         ViewTreeObserver vto = root.getViewTreeObserver();
-        vto.addOnGlobalLayoutListener(() -> schedule(root));
-        vto.addOnScrollChangedListener(() -> schedule(root));
+        // Изменения раскладки/прокрутки помечают окно «грязным», а проверка идёт прямо
+        // перед отрисовкой кадра: так скрытые элементы не мелькают при возврате на экран
+        // и при появлении новых ячеек списка.
+        final boolean[] dirty = {true};
+        final int[] cancelled = {0};
+        vto.addOnGlobalLayoutListener(() -> dirty[0] = true);
+        vto.addOnScrollChangedListener(() -> dirty[0] = true);
+        vto.addOnPreDrawListener(() -> {
+            if (!dirty[0]) return true;
+            dirty[0] = false;
+            boolean changed = false;
+            try {
+                lastScan.put(root, SystemClock.uptimeMillis());
+                changed = scan(root);
+            } catch (Throwable t) {
+                Log.e("Ошибка при обходе интерфейса", t);
+            }
+            // Что-то только что скрыли — отменяем этот кадр, следующий нарисуется уже без них.
+            // Не больше двух отмен подряд, чтобы не зависнуть, если приложение упорно показывает элемент.
+            if (changed && cancelled[0] < 2) {
+                cancelled[0]++;
+                return false;
+            }
+            cancelled[0] = 0;
+            return true;
+        });
         schedule(root);
     }
 
@@ -151,7 +175,12 @@ final class ViewHider {
         return new java.util.HashSet<>(recentSources);
     }
 
-    private static void scan(View root) {
+    /** Были ли в последнем обходе изменения видимости/размеров. */
+    private static boolean scanChanged;
+
+    /** @return true, если что-то было скрыто или показано */
+    private static boolean scan(View root) {
+        scanChanged = false;
         boolean active = HookConfig.enabled
                 && (HookConfig.hideAdViews || HookConfig.hideAdLabeled || !HookConfig.rules.isEmpty());
         Map<View, String> targets = new IdentityHashMap<>();
@@ -179,10 +208,13 @@ final class ViewHider {
         // (например, переиспользованные ячейки списка).
         List<View> restore = new ArrayList<>();
         for (View v : hidden.keySet()) {
-            if (!targets.containsKey(v) && (v.getRootView() == root || !v.isAttachedToWindow())) restore.add(v);
+            // Отсоединённые элементы (экран ушёл в фон, ячейка в запасе у списка) не трогаем:
+            // иначе при возврате они на мгновение видны. Их проверим, когда снова появятся в окне.
+            if (!targets.containsKey(v) && v.isAttachedToWindow() && v.getRootView() == root) restore.add(v);
         }
         for (View v : restore) show(v);
         if (!targets.isEmpty()) Log.d("Скрыто элементов: " + targets.size());
+        return scanChanged;
     }
 
     /**
@@ -367,6 +399,7 @@ final class ViewHider {
             s.mode = mode;
             hidden.put(v, s);
             v.setVisibility(mode); // пройдёт через хук и останется скрытым
+            scanChanged = true;
         } else {
             if (s.mode != mode) {
                 s.mode = mode;
@@ -377,6 +410,7 @@ final class ViewHider {
                 // приложение снова показало элемент — запоминаем и прячем заново.
                 s.visibility = View.VISIBLE;
                 v.setVisibility(mode);
+                scanChanged = true;
             }
         }
         if (keepSpace) return;
@@ -407,6 +441,7 @@ final class ViewHider {
                 else lp.height = 0;
                 s.lpZeroed = true;
                 v.setLayoutParams(lp);
+                scanChanged = true;
             }
         }
     }
@@ -429,5 +464,6 @@ final class ViewHider {
         if (s == null) return;
         restoreLp(v, s);
         v.setVisibility(s.visibility);
+        scanChanged = true;
     }
 }

@@ -10,8 +10,8 @@ android {
         applicationId 'com.qmurzik.yago'
         minSdk 27
         targetSdk 34
-        versionCode 8
-        versionName '1.2'
+        versionCode 9
+        versionName '1.2.1'
     }
 
     buildFeatures {
