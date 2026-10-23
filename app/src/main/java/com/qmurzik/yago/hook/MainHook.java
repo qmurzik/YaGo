@@ -44,6 +44,7 @@ public class MainHook implements IXposedHookLoadPackage {
         Log.i("Загрузка в " + lpparam.packageName + " (" + lpparam.processName + ")");
         HookConfig.init();
 
+        safe("защита от падений", CrashGuard::install);
         safe("сеть", MainHook::hookNetwork);
         safe("WebView", MainHook::hookWebView);
         safe("Activity", MainHook::hookActivity);
@@ -114,6 +115,11 @@ public class MainHook implements IXposedHookLoadPackage {
             protected void afterHookedMethod(MethodHookParam param) {
                 Activity a = (Activity) param.thisObject;
                 if (HookConfig.refresh(a)) ViewHider.rescanAll();
+                String notice = HookConfig.takeCrashNotice(a);
+                if (notice != null) {
+                    android.widget.Toast.makeText(a, "YaGo: приложение падало после скрытия, отключено: " + notice
+                            + ". Вернуть можно в списке «Скрытые».", android.widget.Toast.LENGTH_LONG).show();
+                }
                 View decor = a.getWindow().getDecorView();
                 ViewHider.attachRoot(decor);
                 Fab.sync(a);

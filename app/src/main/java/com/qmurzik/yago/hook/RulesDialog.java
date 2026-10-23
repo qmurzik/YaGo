@@ -37,6 +37,27 @@ final class RulesDialog {
             if (onChanged != null) onChanged.run();
         };
 
+        final java.util.Set<String> off = HookConfig.disabledAfterCrash(a);
+        if (!off.isEmpty()) {
+            final LinearLayout warn = new LinearLayout(a);
+            warn.setOrientation(LinearLayout.VERTICAL);
+            warn.setPadding(ui.dp(12), ui.dp(10), ui.dp(12), ui.dp(10));
+            warn.setBackground(Ui.round(ui.tonal, ui.dp(12)));
+            warn.addView(ui.text("Отключено после падения приложения: " + String.join(", ", off),
+                    13, ui.onSurface, false));
+            TextView back = ui.button("Включить снова", false);
+            back.setOnClickListener(v -> {
+                HookConfig.clearDisabledAfterCrash(a);
+                ViewHider.rescanAll();
+                box.removeView(warn);
+            });
+            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            blp.topMargin = ui.dp(8);
+            warn.addView(back, blp);
+            box.addView(warn);
+        }
+
         if (list.isEmpty()) {
             box.addView(ui.text("Пока ничего не скрыто.\n\nОткройте пикер, нажмите на элемент и выберите «Скрыть элемент».",
                     14, ui.onSurfaceVariant, false));

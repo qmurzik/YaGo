@@ -11,6 +11,7 @@ import android.widget.HorizontalScrollView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -135,48 +136,102 @@ final class ViewHider {
 
     // ---------------------------------------------------------------- обход
 
+    /** Источник скрытия для эвристик (для защиты от падений). */
+    static final String SRC_ADS = "@ads";
+    static final String SRC_LABELED = "@labeled";
+
+    /** Правила, из-за которых что-то было скрыто впервые, и когда это было. */
+    private static final Set<String> recentSources = new java.util.HashSet<>();
+    private static volatile long recentTime;
+
+    static synchronized Set<String> recentSources(long withinMs) {
+        if (SystemClock.uptimeMillis() - recentTime > withinMs) return Collections.emptySet();
+        return new java.util.HashSet<>(recentSources);
+    }
+
     private static void scan(View root) {
         boolean active = HookConfig.enabled
                 && (HookConfig.hideAdViews || HookConfig.hideAdLabeled || !HookConfig.rules.isEmpty());
-        Set<View> targets = Collections.newSetFromMap(new IdentityHashMap<>());
+        Map<View, String> targets = new IdentityHashMap<>();
         if (active && root.isAttachedToWindow()) {
             walk(root, root, HookConfig.rules, true, targets);
+            escalateEmptyParents(root, targets);
         }
-        for (View v : targets) hide(v);
+        boolean fresh = false;
+        for (Map.Entry<View, String> t : targets.entrySet()) {
+            if (!hidden.containsKey(t.getKey())) {
+                synchronized (ViewHider.class) {
+                    if (!fresh) {
+                        recentSources.clear();
+                        fresh = true;
+                    }
+                    recentSources.add(t.getValue());
+                    recentTime = SystemClock.uptimeMillis();
+                }
+            }
+            hide(t.getKey());
+        }
 
         // Возвращаем элементы, которые больше не подходят под правила
         // (например, переиспользованные ячейки списка).
         List<View> restore = new ArrayList<>();
         for (View v : hidden.keySet()) {
-            if (!targets.contains(v) && (v.getRootView() == root || !v.isAttachedToWindow())) restore.add(v);
+            if (!targets.containsKey(v) && (v.getRootView() == root || !v.isAttachedToWindow())) restore.add(v);
         }
         for (View v : restore) show(v);
         if (!targets.isEmpty()) Log.d("Скрыто элементов: " + targets.size());
     }
 
-    /** Что именно скрыло бы правило в этом окне (для проверки при создании правила). */
-    static Set<View> evaluate(View root, Rule rule) {
-        Set<View> targets = Collections.newSetFromMap(new IdentityHashMap<>());
-        walk(root, root, Collections.singletonList(rule), false, targets);
-        return targets;
+    /**
+     * Контейнер, у которого не осталось ни одного видимого элемента, скрываем целиком.
+     * Пустой контейнер бесполезен, а некоторые (сетка DivKit) на пустом списке падают.
+     */
+    private static void escalateEmptyParents(View root, Map<View, String> targets) {
+        ArrayDeque<View> queue = new ArrayDeque<>(targets.keySet());
+        while (!queue.isEmpty()) {
+            View v = queue.poll();
+            ViewParent p = v.getParent();
+            if (!(p instanceof ViewGroup) || p == root || targets.containsKey(p)) continue;
+            ViewGroup g = (ViewGroup) p;
+            boolean anyVisible = false;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View c = g.getChildAt(i);
+                if (c == null || ignored.containsKey(c) || targets.containsKey(c)) continue;
+                if (c.getVisibility() != View.GONE) {
+                    anyVisible = true;
+                    break;
+                }
+            }
+            if (!anyVisible) {
+                targets.put(g, targets.get(v));
+                queue.add(g);
+            }
+        }
     }
 
-    private static void walk(View v, View root, List<Rule> rules, boolean heuristics, Set<View> targets) {
+    /** Что именно скрыло бы правило в этом окне (для проверки при создании правила). */
+    static Set<View> evaluate(View root, Rule rule) {
+        Map<View, String> targets = new IdentityHashMap<>();
+        walk(root, root, Collections.singletonList(rule), false, targets);
+        return targets.keySet();
+    }
+
+    private static void walk(View v, View root, List<Rule> rules, boolean heuristics, Map<View, String> targets) {
         if (ignored.containsKey(v)) return;
         if (v != root) {
             for (int i = 0; i < rules.size(); i++) {
                 Rule r = rules.get(i);
                 if (matches(r, v)) {
                     View t = ancestor(v, r.up);
-                    if (t != null && t != root) targets.add(t);
+                    if (t != null && t != root && !targets.containsKey(t)) targets.put(t, r.raw);
                 }
             }
-            if (heuristics && HookConfig.hideAdViews && isAdView(v)) targets.add(v);
+            if (heuristics && HookConfig.hideAdViews && isAdView(v) && !targets.containsKey(v)) targets.put(v, SRC_ADS);
             if (heuristics && HookConfig.hideAdLabeled && v instanceof TextView) {
                 CharSequence text = ((TextView) v).getText();
                 if (text != null && text.length() <= 40 && AD_LABEL.matcher(text).matches()) {
                     View card = findCard(v, root);
-                    if (card != null) targets.add(card);
+                    if (card != null && !targets.containsKey(card)) targets.put(card, SRC_LABELED);
                 }
             }
         }
